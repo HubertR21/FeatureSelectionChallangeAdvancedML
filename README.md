@@ -16,6 +16,10 @@ The `outcomes` folder contains the ourcomes in the form of txt files, which cont
 
 The `preprocessed_freq_001`, `preprocessed_freq_01_MI`, and `preprocessed_raw` folders contain the files with the preprocessed (FS) data used in the `Model_training.Rmd`.
 
-The `Model_training.Rmd` file performs a trainig of the models with the use of AutoML package the [forester](https://github.com/ModelOriented/forester).
+The `Model_training.Rmd` file performs a training of the models with the use of AutoML package the [forester](https://github.com/ModelOriented/forester).
 
 The `Model_training.html` is a rendered and calculated version of the `Model_training.Rmd` file.
+
+The `preprocessing.ipynb` file peforms feature selection with Python language.
+
+The `preprocess_submission.ipynb` file performs preprocessing of the validation dataset for the best preprocessing method.
