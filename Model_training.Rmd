@@ -1,0 +1,468 @@
+---
+title: "Feature selection modelling with forester"
+author: "Hubert Ruczyński"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: true
+    theme: lumen
+    toc_depth: 3
+    number_sections: true
+    latex_engine: xelatex
+---
+
+```{css css settings, echo=FALSE}
+body .main-container {
+  max-width: 1800px !important;
+  width: 1800px !important;
+  margin-left: auto; !important;
+  margin-right: auto; !important;
+}
+body {
+  max-width: 1800px !important;
+  margin-left: auto; !important;
+  margin-right: auto; !important;
+}
+```
+
+# Initialization
+
+```{r initialization, include = FALSE, cache=TRUE}
+library(forester)
+library(ggplot2)
+library(patchwork)
+library(tictoc)
+library(knitr)
+library(data.table)
+require(data.table)
+```
+
+# Read data
+
+Firstly, let's read the preprocessed datasets from three directories, each obtaining different results from the previous stage. The `preprocessed_raw` dataset contains the results with only preprocessing methods used, `preprocessed_freq_001` additionally took only those features that had more than 0.001 non zero values (thus, they weren't insanely sparse), `preprocessed_freq_01_MI` had a higher frequency treshold at 0.01 and contained also the method for feature selection with the usage of mutual information.
+
+```{r read data, cache=TRUE}
+raw_names <- list.files(path = "preprocessed_raw/", pattern = "*.csv") 
+raw_list <- lapply(paste0("preprocessed_raw/", raw_names), read.csv) 
+names(raw_list) <- raw_names
+
+freq_001_names <- list.files(path = "preprocessed_freq_001/", pattern = "*.csv") 
+freq_001_list <- lapply(paste0("preprocessed_freq_001/", freq_001_names), read.csv) 
+names(freq_001_list) <- freq_001_names
+
+freq_01_names <- list.files(path = "preprocessed_freq_01_MI/", pattern = "*.csv") 
+freq_01_list <- lapply(paste0("preprocessed_freq_01_MI/", freq_01_names), read.csv) 
+names(freq_01_list) <- freq_01_names
+
+for (i in 1:length(raw_list)) {
+  raw_list[[i]]        <- raw_list[[i]][, !names(raw_list[[i]]) %in% c('X')]
+}
+for (i in 1:length(freq_001_list)) {
+  freq_001_list[[i]]   <- freq_001_list[[i]][, !names(freq_001_list[[i]]) %in% c('X')] 
+}
+for (i in 1:length(freq_01_list)) {
+  freq_01_list[[i]] <- freq_01_list[[i]][, !names(freq_01_list[[i]]) %in% c('X')] 
+}
+```
+
+# Metrics
+
+In this section we prepare the functions to calculate the performance metrics used in this notebook.
+
+```{r metrics, cache=TRUE}
+get_metrics <- function(observed, predictions) {
+  models_frame           <- data.frame(matrix(nrow = length(predictions), ncol = 4))
+
+  observed <- as.numeric(observed)
+  for (i in 1:length(predictions)) {
+    tp = sum((observed == 1) * (as.numeric(unlist(predictions[[i]])) >= 0.5))
+    fp = sum((observed <= 0) * (as.numeric(unlist(predictions[[i]])) >= 0.5))
+    tn = sum((observed <= 0) * (as.numeric(unlist(predictions[[i]])) < 0.5))
+    fn = sum((observed == 1) * (as.numeric(unlist(predictions[[i]])) < 0.5))
+    models_frame[i, ] <- c(names(predictions)[i],
+                           model_performance_sensitivity(tp, fp, tn, fn),
+                           model_performance_specificity(tp, fp, tn, fn),
+                           model_performance_balanced_accuracy(tp, fp, tn, fn))
+  }
+
+  names(models_frame) <- c('name', 'sensitivity', 'specificity', 'balanced_accuracy')
+  models_frame <- models_frame[order(models_frame$balanced_accuracy, decreasing = TRUE), ]
+  return(models_frame)
+}
+
+
+
+model_performance_sensitivity <- function(tp, fp, tn, fn) {
+  (tp) / (tp + fn)
+}
+
+model_performance_specificity <- function(tp, fp, tn, fn) {
+  (tn) / (fp + tn)
+}
+
+model_performance_balanced_accuracy <- function(tp, fp, tn, fn) {
+  (model_performance_sensitivity(tp, fp, tn, fn) + model_performance_specificity(tp, fp, tn, fn)) / 2
+}
+```
+
+# Box plot function
+
+This section introduces a function for drawing the box plots comparing the balanced accuracies for different approaches.
+
+```{r boxplot function}
+boxplot <- function(out, dataset, preprocessing) {
+  df_names <- c()
+  df_ba    <- c()
+  
+  for (i in 1:length(out)) {
+    name   <- names(out)[i]
+    if (dataset == 'spam') {
+      name <- substr(name, 11, (nchar(name) - 4))
+    }else if(dataset == 'artificial') {
+      name <- substr(name, 17, (nchar(name) - 4))
+    }
+    
+    df_names <- c(df_names, rep(name, 10))
+    df_ba    <- c(df_ba, as.numeric(out[[i]]$balanced_accuracy))
+  }
+  
+  plot_df <- data.frame(name = df_names, balanced_accuracy = df_ba)
+  
+  ggplot(plot_df, aes(x = df_names, y = df_ba)) +
+    geom_boxplot(alpha = 0.5) +
+    theme_minimal() +
+    labs(title = 'Boxplot of the balanced acuracy between different datasets',
+         subtitle = paste0('for ', dataset, ' dataset and ', preprocessing,' preprocessing'),
+         x = 'Dataset name',
+         y = 'Balanced Accuracy') +
+    theme(plot.title = element_text(colour = 'black', size = 25),
+          axis.title.x = element_text(colour = 'black', size = 15),
+          axis.title.y = element_text(colour = 'black', size = 15))
+}
+
+```
+
+# forester training
+
+In our approach, to obtain the best possible results from the prepared datasets, we've decided to use an AutoML package called the `forester`, where Hubert is the main developer and maintainer. The forester offers us a fast and simple training of the tree-based models, such as random forest, decision tree, xgboost, and lightgbm. This model family proves to be excellent for the datasets with small number of features, what perfectly matches with our datasets where we've selected the most prominent columns. As we cannot set the balanced accuracy metric as the optimization metric for the Bayesian optimization, we've decided to turn it off, and calculate dozens of models with the usage of the Random Search algorithm. To ensure the same splits, we've set the same split seed for all experiments, and we've divided a training dataset into training and testing subsets, to estimate the final performance.
+
+## Parameters
+
+```{r parameters multi train, cache=TRUE}
+Engine = c('ranger', 'xgboost', 'decision_tree', 'lightgbm') #catboost takes too long to calculate
+Verbose = FALSE
+Train_test_split = c(0.8, 0.199, 0.001)
+Split_seed = 2137
+Bayes_iter = 0
+Random_evals = 50
+Advanced_preprocessing = FALSE
+Metrics = 'all'
+Sort_by = 'balanced_accuracy'
+```
+
+## Function
+
+This function trains the models from a given set of dataframes.
+
+```{r multi train function, cache=TRUE}
+multi_train <- function(data) {
+  df_names <- names(data)
+  art_no   <- 0
+  
+  for (i in 1:length(data)) {
+    if(grepl('artificial',  df_names[i])) {
+      art_no <- art_no + 1
+    }
+  }
+  
+  spam_no <- length(data) - art_no
+  
+  if (art_no != 0) {
+    art  <- data[1:art_no]
+  } else {
+    art  <- NULL
+  }
+  
+  spam <- data[(art_no + 1): length(data)]
+  
+  art_models     <- list()
+  art_preds      <- list()
+  art_best_preds <- list()
+  art_metrics    <- list()
+  
+  if (art_no != 0) {
+    art_k <- length(art) / 2
+    for (i in 1:art_k) {
+      art_models[[i]]  <- train(data = art[[i + art_k]], 
+                                y = 'TARGET',
+                                engine = Engine,
+                                verbose = Verbose,
+                                train_test_split = Train_test_split,
+                                split_seed = Split_seed,
+                                bayes_iter = Bayes_iter,
+                                random_evals = Random_evals,
+                                advanced_preprocessing = Advanced_preprocessing,
+                                metrics = Metrics,
+                                sort_by = Sort_by)
+      
+      art_preds[[i]]      <- predict_new(art_models[[i]], art[[i]])
+      art_best_preds[[i]] <- art_preds[[i]][head(art_models[[i]]$score_test$name, 10)]
+      art_metrics[[i]]    <- get_metrics(art[[i]]$TARGET, art_best_preds[[i]]) 
+    }
+    
+    names(art_metrics) <- df_names[1:art_k]
+    
+  } else {
+    art_metrics <- NULL
+  }
+  
+  spam_models     <- list()
+  spam_preds      <- list()
+  spam_best_preds <- list()
+  spam_metrics    <- list()
+  
+  if (spam_no != 0) {
+    spam_k <- length(spam) / 2
+    for (i in 1:spam_k) {
+      spam_models[[i]] <- train(data = spam[[i + spam_k]], 
+                                y = 'TARGET',
+                                engine = Engine,
+                                verbose = Verbose,
+                                train_test_split = Train_test_split,
+                                split_seed = Split_seed,
+                                bayes_iter = Bayes_iter,
+                                random_evals = Random_evals,
+                                advanced_preprocessing = Advanced_preprocessing,
+                                metrics = Metrics,
+                                sort_by = Sort_by)
+      
+      spam_preds[[i]]      <- predict_new(spam_models[[i]], spam[[i]])
+      spam_best_preds[[i]] <- spam_preds[[i]][head(spam_models[[i]]$score_test$name, 10)]
+      spam_metrics[[i]]    <- get_metrics(spam[[i]]$TARGET, spam_best_preds[[i]]) 
+    }
+    
+    names(spam_metrics) <- df_names[(art_no + 1):(art_no + spam_k)]
+    
+  } else {
+    spam_metrics <- NULL
+  }
+  
+  return(list(
+    art_metrics  = art_metrics,
+    spam_metrics = spam_metrics
+  ))
+
+}
+```
+
+## Training
+
+Whole training lasts around half an hour on a high quality gaming PC.
+
+```{r training, cache=TRUE}
+
+tryCatch({
+      freq_01_out  <- readRDS('freq_01_out.RData')
+      freq_001_out <- readRDS('freq_001_out.RData')
+      raw_list_out <- readRDS('raw_list_out.RData')
+    },
+    error = function(cond) {
+      tic(cat('Frequency 01 data training \n'))
+      freq_01_out  <- multi_train(freq_01_list)
+      toc()
+      tic(cat('Frequency 001 data training \n'))
+      freq_001_out <- multi_train(freq_001_list)
+      toc()
+      tic(cat('Raw data training \n'))
+      raw_list_out <- multi_train(raw_list)
+      toc()
+      
+      saveRDS(freq_01_out, 'freq_01_out.RData')
+      saveRDS(freq_001_out, 'freq_001_out.RData')
+      saveRDS(raw_list_out, 'raw_list_out.RData')
+      }
+    )
+```
+
+# Spam results
+
+In this section we present results for the spam dataset.
+
+## Raw list
+
+```{r spam raw results, cache=TRUE, results = "asis", fig.width = 14, fig.height = 6}
+for (i in 1:length(raw_list_out$spam_metrics)) {
+  cat('\n', names(raw_list_out$spam_metrics)[i], '\n')
+  print(kable(raw_list_out$spam_metrics[[i]]))
+}
+
+boxplot(raw_list_out$spam_metrics, 'spam', 'raw')
+```
+
+As we can see, for the basic approach,we can see that the BORUTA algorithm achieved an astonishing result with a single outlier which gained over 91% of balanced accuracy.
+
+Second best selection method is the feature importance selection based on the trees, where the performance was the better, the more features were left for the training. The same we can say about the worst method called MRMR, moreover in this case we can witness a huge difference between the method with 100 and 50 features.
+
+## At least 0.001 frequency
+
+```{r spam 001 results, cache=TRUE, results = "asis", fig.width = 20, fig.height = 6}
+for (i in 1:length(freq_001_out$spam_metrics)) {
+  cat('\n', names(freq_001_out$spam_metrics)[i], '\n')
+  print(kable(freq_001_out$spam_metrics[[i]]))
+}
+
+boxplot(freq_001_out$spam_metrics, 'spam', 'at least 0.001 frequency')
+```
+
+After the initial filtering we could add a feature selection method based on chi2 metric, however its performance was only better than MRMR. We can also witness a drastic decrease of performance for the BORUTA method, and a general mean decrease in the performance of the models.
+
+There is a one outlier however that puts a different light on this case. The best performing model was an FI method using the mutual information, and its median results are far better than any other method, moreover it produced a best performing model with balanced accuracy equal 91.7%
+
+## At least 0.01 frequency
+
+```{r spam 01 results, cache=TRUE, results = "asis", fig.width = 22, fig.height = 6}
+for (i in 1:length(freq_01_out$spam_metrics)) {
+  cat('\n', names(freq_01_out$spam_metrics)[i], '\n')
+  print(kable(freq_01_out$spam_metrics[[i]]))
+}
+
+boxplot(freq_01_out$spam_metrics, 'spam', 'at least 0.01 frequency')
+```
+
+The final example with a more rigorous filtering was a huge success, as most models have more than 90% of balanced accuracy. In this case, the mutual information method also proved to be the best, and we achieved the best model with 93% of balanced accuracy.
+
+# Artificial results
+
+## Raw list
+
+```{r artificial raw results, cache=TRUE, results = "asis", fig.width = 14, fig.height = 6}
+for (i in 1:length(raw_list_out$art_metrics)) {
+  cat('\n', names(raw_list_out$art_metrics)[i], '\n')
+  print(kable(raw_list_out$art_metrics[[i]]))
+}
+
+boxplot(raw_list_out$art_metrics, 'artificial', 'raw')
+```
+
+For the artificial dataset, we didn't have to explicitly filter the frequency for the chi2 test, as we've resigned from using this method. This dataset shows an incredible differences between various methods. The best one is the BORUTA, which selected 20 parameters, however it also provided highest balanced accuracy equal 0.875. Next method was less successful and with smaller number of features (not 10, but 5) the training results were even worse.. Finally, the MRMR obtained the worst results around 0.6.
+
+## At least 0.01 frequency
+
+```{r artificial 01 results, cache=TRUE, results = "asis", fig.width = 14, fig.height = 6}
+for (i in 1:length(freq_01_out$art_metrics)) {
+  cat('\n', names(freq_01_out$art_metrics)[i], '\n')
+  print(knitr::kable(freq_01_out$art_metrics[[i]]))
+}
+
+boxplot(freq_01_out$art_metrics, 'artificial', 'at least 0.01 frequency')
+```
+
+In this case, using the mutual information was a dead end, as the final results were only slightly better than the MRMR.
+
+# Best models
+
+## Spam
+
+As we can see from the table below, the best model was a lightgbm with basic parameters, so we will train this model again with the forester and keep it for the predictions. Additionally, as we can limit ourselves to just one dataset and one engine, we are able to increase the number of random evaluations and count for obtaining better results this way.
+
+```{r}
+kable(freq_01_out$spam_metrics$spam_test_mutual_information_50.csv)
+```
+
+### Training
+
+```{r}
+spam_best <- train (data = freq_01_list$spam_train_mutual_information_50.csv, 
+                    y = 'TARGET',
+                    engine = 'lightgbm',
+                    verbose = Verbose,
+                    train_test_split = Train_test_split,
+                    split_seed = Split_seed,
+                    bayes_iter = 0,
+                    random_evals = 100,
+                    advanced_preprocessing = Advanced_preprocessing,
+                    metrics = Metrics,
+                    sort_by = Sort_by)
+```
+
+```{r}
+spam_best_preds   <- predict_new(spam_best, freq_01_list$spam_test_mutual_information_50.csv)
+spam_best_metrics <- get_metrics(freq_01_list$spam_test_mutual_information_50.csv$TARGET, spam_best_preds)
+kable(spam_best_metrics)
+```
+
+As we can see, in this case the additional number of random searched models didn't help us with obtaining better results, so we will stick to the lightgbm_model
+
+### Predictions
+
+```{r}
+spam_validation <- read.csv2('data/spam_valid_preprocessed.csv', sep = ',')
+spam_validation <- spam_validation[-1]
+# The forester due to a big requires an y coloumn to work, even though it doesn't use this columns values.
+spam_validation$TARGET <- c(rep(0, 500), rep(1, 500))
+```
+
+```{r}
+spam_best_preds          <- predict_new(spam_best, spam_validation)
+spam_final_preds_probs   <- round(spam_best_preds$lightgbm_model, 7)
+spam_final_preds_labels  <- ifelse(spam_best_preds$lightgbm_model > 0.5, 1, 0)
+```
+
+```{r}
+fwrite(list(spam_final_preds_probs), 'outcomes/spam_final_preds_probs.txt')
+fwrite(list(spam_final_preds_labels), 'outcomes/spam_final_preds_labels.txt')
+```
+
+## Artificial
+
+In this case we will also train more models, and we will limit ourselves to the ranger engine, as it proved to be the best one.
+
+```{r}
+kable(raw_list_out$art_metrics$artificial_test_boruta_20.csv)
+```
+
+### Training
+
+```{r}
+art_best <- train (data = raw_list$artificial_train_boruta_20.csv, 
+                    y = 'TARGET',
+                    engine = 'ranger',
+                    verbose = Verbose,
+                    train_test_split = Train_test_split,
+                    split_seed = Split_seed,
+                    bayes_iter = 0,
+                    random_evals = 100,
+                    advanced_preprocessing = Advanced_preprocessing,
+                    metrics = Metrics,
+                    sort_by = Sort_by)
+```
+
+```{r}
+art_best_preds   <- predict_new(art_best, raw_list$artificial_test_boruta_20.csv)
+art_best_metrics <- get_metrics(raw_list$artificial_test_boruta_20.csv$TARGET, art_best_preds)
+kable(art_best_metrics)
+```
+
+As we can see, the results have been drastically improved from 87% to 88% of balanced accuracy, so in the final predictions we will use the `ranger_RS_33` model.
+
+### Predictions
+
+```{r}
+art_validation <- read.csv2('data/artificial_valid_preprocessed.csv', sep = ',')
+art_validation <- art_validation[-1]
+# The forester due to a big requires an y coloumn to work, even though it doesn't use this columns values.
+art_validation$TARGET <- c(rep(-1, 300), rep(1, 300))
+```
+
+```{r}
+art_best_preds          <- predict_new(art_best, art_validation)
+art_final_preds_probs   <- round(art_best_preds$ranger_RS_33, 7)
+art_final_preds_labels  <- ifelse(art_best_preds$ranger_RS_33 > 0.5, 1, 0)
+```
+
+```{r}
+fwrite(list(art_final_preds_probs), 'outcomes/art_final_preds_probs.txt')
+fwrite(list(art_final_preds_labels), 'outcomes/art_final_preds_labels.txt')
+```
