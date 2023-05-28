@@ -3,7 +3,7 @@ The implementation of the project for Advanced Machine Learning classes during t
 
 ## Authors
 
-[Huebrt Ruczyński](https://github.com/HubertR21)
+[Hubert Ruczyński](https://github.com/HubertR21)
 
 [Adrian Stańdo](https://github.com/adrianstando)
 
