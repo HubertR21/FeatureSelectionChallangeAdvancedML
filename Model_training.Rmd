@@ -264,9 +264,9 @@ Whole training lasts around half an hour on a high quality gaming PC.
 ```{r training, cache=TRUE}
 
 tryCatch({
-      freq_01_out  <- readRDS('freq_01_out.RData')
-      freq_001_out <- readRDS('freq_001_out.RData')
-      raw_list_out <- readRDS('raw_list_out.RData')
+      freq_01_out  <- readRDS('cached_results/freq_01_out.RData')
+      freq_001_out <- readRDS('cached_results/freq_001_out.RData')
+      raw_list_out <- readRDS('cached_results/raw_list_out.RData')
     },
     error = function(cond) {
       tic(cat('Frequency 01 data training \n'))
@@ -279,9 +279,9 @@ tryCatch({
       raw_list_out <- multi_train(raw_list)
       toc()
       
-      saveRDS(freq_01_out, 'freq_01_out.RData')
-      saveRDS(freq_001_out, 'freq_001_out.RData')
-      saveRDS(raw_list_out, 'raw_list_out.RData')
+      saveRDS(freq_01_out, 'cached_results/freq_01_out.RData')
+      saveRDS(freq_001_out, 'cached_results/freq_001_out.RData')
+      saveRDS(raw_list_out, 'cached_results/raw_list_out.RData')
       }
     )
 ```

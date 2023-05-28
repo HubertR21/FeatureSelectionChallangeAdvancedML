@@ -1781,9 +1781,9 @@ Sort_by = &#39;balanced_accuracy&#39;</code></pre>
 <p>Whole training lasts around half an hour on a high quality gaming
 PC.</p>
 <pre class="r"><code>tryCatch({
-      freq_01_out  &lt;- readRDS(&#39;freq_01_out.RData&#39;)
-      freq_001_out &lt;- readRDS(&#39;freq_001_out.RData&#39;)
-      raw_list_out &lt;- readRDS(&#39;raw_list_out.RData&#39;)
+      freq_01_out  &lt;- readRDS(&#39;cached_results/freq_01_out.RData&#39;)
+      freq_001_out &lt;- readRDS(&#39;cached_results/freq_001_out.RData&#39;)
+      raw_list_out &lt;- readRDS(&#39;cached_results/raw_list_out.RData&#39;)
     },
     error = function(cond) {
       tic(cat(&#39;Frequency 01 data training \n&#39;))
@@ -1796,9 +1796,9 @@ PC.</p>
       raw_list_out &lt;- multi_train(raw_list)
       toc()
       
-      saveRDS(freq_01_out, &#39;freq_01_out.RData&#39;)
-      saveRDS(freq_001_out, &#39;freq_001_out.RData&#39;)
-      saveRDS(raw_list_out, &#39;raw_list_out.RData&#39;)
+      saveRDS(freq_01_out, &#39;cached_results/freq_01_out.RData&#39;)
+      saveRDS(freq_001_out, &#39;cached_results/freq_001_out.RData&#39;)
+      saveRDS(raw_list_out, &#39;cached_results/raw_list_out.RData&#39;)
       }
     )</code></pre>
 </div>
